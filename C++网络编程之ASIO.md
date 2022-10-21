@@ -3,7 +3,9 @@
 ## 前言
 
 &emsp;&emsp;是时候熟悉ASIO了. 
-&emsp;&emsp;C++20标准库的网络部分将是基于`ASIO`, 已无疑义, 目前唯一的变数只是时间的问题. `networking`的提案**依赖**`executor`的提案, 
+
+&emsp;&emsp;C++20标准库的网络部分将是基于`ASIO`, 已无疑义, 目前唯一的变数只是时间的问题. `networking`的提案**依赖**`executor`的提案. 
+
 &emsp;&emsp;所以只有在`executor`进`C++20`的前提下, `networking`才能同一期进入. 
 
 &emsp;&emsp;WG21(c++标准委员会)将在今年9月22至23两天内(会议排期看这里), 加班加点专门讨论`executor`的提案, 肯定是希望`executor`进入`C++20`, 所以对于网络部分进入`C++20`, 也是可以期待的了. 对于`ASIO`进标准, 是好是坏我觉得不重要, 重要的是标准库中终于有网络相关的库了. 大家都用一样的库, 才能便于交流. 如果每个人都自己造轮子, 含有张三牌轮子的代码给李四用, 使用起来成本会很高. 标准库本身的意义不就是这样么？
@@ -18,30 +20,47 @@
 * 5  不喜欢ASIO的代码;
 
 **先看1**, ASIO依赖boost, 讨厌boost的人也无条件讨厌ASIO；
+
 &emsp;&emsp;我也讨厌boost, 如果ASIO还未脱离boost就不会有这篇文章, 现在`C++11`的编译器使用`ASIO`已经不需要boost了, 编译的时候定义宏`ASIO_STANDALONE`即可, 比如说用g++编译, 采用`g++ -DASIO_STANDALONE ….`
 
+
 **再看2**, ASIO内部有锁, 导致牺牲了很多性能；
+
 &emsp;&emsp;有锁这个是事实, 以后是多核的天下, 多线程本来就是主流, 作为高性能的库, 以多线程为默认场景这个是可以接受的. 但是在使用`ASIO`时, 如果确定只用单线程, 只要在构造`io_context`时传入参数1, 即可. 像这样; 
 ```cpp
 asio::io_context context(1); // one thread
 ```
 &emsp;&emsp;这是我看源码时发现的, 只要设置了参数1, 所有`lock`和`unlock`都会被if语句跳过, 相当于是无锁. 
+
 &emsp;&emsp;顺便说一下, 不要小看了单线程哦, 异步编程的单线程性能那可是相当之高. 
 
+
 **再看3**, ASIO为了跨平台, 将Linux/Darwin系统的`reactor`模式, 封装成了windows系统的`proactor`模式, 对于Linux/Darwin牺牲了性能; 
+
 &emsp;&emsp;ASIO采用`proactor`没错. 但是有两点我想说, 首先是使用`ASIO`时, 你依然可以使用`reactor`模式, 其次是我不觉得将linux/darwin的`epoll`/`kqueue`实现成`proactor`让性能下降了. 
+
 &emsp;&emsp;程序员不缺乏偏执狂, linux程序员可能讨厌`proactor`, 觉得`ASIO`居然让linux去迎合windows的套路, 无法接受；而windows程序员觉得linux/mac的`reactor`只是半成品  觉得linux程序员好可怜, 总之就是鄙视链无处不在. 
+
 &emsp;&emsp;采用ASIO如何使用`reactor`模式来编程呢？调用socket类的`async_wait`方法用来等待读或者写事件, 在这个函数的回调函数里面去读或者写, 就是`reactor`模式了！当然我相信应该还有其它方法也能使用`reactor`, 毕竟源码里面相关的类名字就叫`epoll_reactor`  `kqueue_reacto`r等等, 直接拿来用也不是不可能. 
+
 &emsp;&emsp;那再来看性能问题, 是不是linux的epoll封装成`proactor`就会变慢. `reactor`的epoll使用姿势一般是这样; 程序监听读  写事件, 事件到来以后系统会通知程序去调用read/write等函数进行读写数据；`ASIO`封装成`proactor`以后变成了这样; 程序需要读数据时, 将收取数据的buffer传给`ASIO`, `ASIO`监听读事件, 在事件到来时帮你调用`read`函数, 存到你的buffer里面, 然后再告诉你; 读到数据了, 需要写数据时情况类似. 
+
 &emsp;&emsp;可见, `reactor`和`proactor`唯一的区别是read/write这些系统调用到底是由`ASIO`库去调用  还是自己写的函数调用, 根本没有本质的区别, 所以说牺牲性能也是无中生有. 
+
 &emsp;&emsp;(`proactor`对于每个scoket一般需要2个buffer, 一万个socket就需要2w个buffer, 比较浪费内存. `reactor`在这一点上面有一些些优势. 对于某些场合的应用, 不管多少socket, 可能只需要少许几个buffer即可. 但是在实战中, 因为需要考虑tcp分包的问题, 每次socket都需要将不满一个数据包的内容暂存起来, 每次发送也不见得能一次发完同样需要将剩余数据存起来下次再发, 所以依然需要2个buffer, 和`proactor`没区别. )
 
+
 **再看4**; ASIO很慢, 不如自己裸写epoll
+
 &emsp;&emsp;这个我承认, 因为我自己就喜欢裸写epoll. 但是ASIO集成了很多特性, 如果你自己想去用epoll实现类似的功能, 肯定是要增加更多的类  每个类增加更多的成员变量  更多的成员函数, 对象拷贝代价变大  函数调用次数变多, 这样一来, 性能有所下降不是正常的事情么？
+
 &emsp;&emsp;以后有空我会去压测一下, 看看ASIO比裸写的epoll到底慢多少, 到时候回来更新内容, 我觉得慢10%以内我都能接受. 至少会压到几十万连接吧, 暂时手头上没足够机器. 
 
+
 **继续看5**; 不喜欢ASIO的代码
+
 &emsp;&emsp;其实C++标准只是规定了接口（名字空间  类名  函数名  参数个数及其类型等等）以及相关算法的复杂度, 每个编译器到时候都会有自己的实现. 可以这么认为; 标准库中的实现代码质量应该优于(至少等于)ASIO  性能高于(至少等于)ASIO. 而且, 标准库中也看不到ASIO这个单词, 到时候只有std::net名字空间, 不存在asio名字空间, 所以, 不管是什么原因对于ASIO无法接受的, 可以休矣. 
+
 &emsp;&emsp;只有抛弃偏见  拥抱变化, 才能愉快地学习  提高. 关于ASIO学习笔记的第一篇, 内容就到这里了. 快来一起愉快地学习ASIO吧. 希望以后能够持续更新. 因为是学习笔记, 所以难免会有纰漏, 欢迎大家批评指正,  对于确认之后的内容我会更新到文章的正文中. 
 
 ## 源码阅读
@@ -103,10 +122,13 @@ asio::async_write        // 全局函数 发送指定字节的数据, 直到发�
 &emsp;&emsp;前面提到了, `ASIO`的可扩展性极高, 对于定时器的管理, 也可以用自定义的类. 大量的定时器可以采用一种叫做时间轮的数据结构来实现, 复杂度为O(1). 
 
 ### asio相关的C++知识
+
 &emsp;&emsp;使用`ASIO`需要熟悉C++11的`lambda`  `std::function`以及智能指针`std::shared_ptr`  `std::enable_shared_from_this`等. 
 
 ### asio初步实践
+
 &emsp;&emsp;最后来写一个http服务器. http服务器是学习网络编程的好素材. http协议的文档很全, 且主要是使用文本协议, 测试简单, 用浏览器就可以测试. http协议不仅仅只能用来做web服务器, 也可以直接拿来在项目中作为通信协议, 比如说网络游戏也可以直接用http协议. 
+
 &emsp;&emsp;http服务器的编程具有下限低上限高的特点, 非常适合用来作为学习编程的素材. 所谓的下限低是指几分钟就能写一个, 上限高是指如果要打磨  完善  优化可能需要几年的时间. 用C写的极简http服务器只需要200行代码, [这里就有一个](https://blog.abhijeetr.com/2010/04/very-simple-http-server-writen-in-c.html). 用`ASIO`来实现一个类似的只要100行以内. 我的实现如下. 
 
 ```cpp
@@ -257,6 +279,7 @@ std::shared_ptr<AbstractReplyItem> AbstractReplyItem::CreateItem(char c) {
 }
 ```
 &emsp;&emsp;在解析回包时, 调用Feed函数, 每次解析一个字符, 在单元测试的`response_parser_test.cpp`中也可以看到其用法. 
+
 &emsp;&emsp;上面简单地说了一下解析协议的类的结构, 现在来看看如何用状态机进行解析. 以OneLineString为例, 该类解析前面5中格式中的以 `+`  `-`  `:`三种字符开头的回包协议, 例如: 
 
 ``` plantext
